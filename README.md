@@ -16,6 +16,9 @@
    标签，一般不需要自己刷新——但在扩展装好之前就打开的页面偶尔会注入失败，双击没反应就
    先刷新一次
 
+不想 clone 仓库的话，直接去 [Releases](https://github.com/YiWeiLai233/chrome-dblclick-close-tab/releases)
+下 `chrome-dblclick-close-tab-*.zip`，解压后按上面第 1–3 步加载解压出来的目录即可。
+
 ## 快捷键
 
 标签栏双击做不到，但键盘可以：装好之后按 **`Alt+Shift+W`** 直接关掉当前标签页。
