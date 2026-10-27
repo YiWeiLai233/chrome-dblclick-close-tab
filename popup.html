@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>双击关标签</title>
+    <link rel="stylesheet" href="ui.css" />
+  </head>
+  <body class="popup">
+    <h1>双击关标签</h1>
+    <p class="hint">在页面内容区双击，当前标签就关掉。</p>
+
+    <div class="row">
+      <span class="title">启用</span>
+      <label class="switch">
+        <input id="enabled" type="checkbox" />
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <div class="row">
+      <span class="title">当前站点豁免</span>
+      <label class="switch">
+        <input id="bypassHere" type="checkbox" />
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <div class="actions">
+      <button id="openOptions" class="btn primary" type="button">更多设置</button>
+      <span id="status" class="status" role="status" aria-live="polite"></span>
+    </div>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
