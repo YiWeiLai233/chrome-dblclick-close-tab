@@ -61,7 +61,32 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   return true; // 异步回复
 });
 
+/* 把内容脚本补注入到已经打开的页面。
+ *
+ * 扩展刚装上或刚更新时，之前就开着的标签里没有 content script，双击自然没反应，
+ * 而用户几乎不会想到「先去刷新一下页面」。这里主动补一次，content.js 里有
+ * __dblclickCloseTabLoaded 兜底，重复注入是安全的。
+ */
+async function injectIntoOpenTabs() {
+  if (!chrome.scripting || !chrome.scripting.executeScript) return;
+  let tabs = [];
+  try {
+    tabs = await chrome.tabs.query({ url: ['http://*/*', 'https://*/*'] });
+  } catch (_) {
+    return;
+  }
+  for (const tab of tabs) {
+    if (tab.id == null || tab.discarded) continue;
+    try {
+      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
+    } catch (_) {
+      /* chrome:// 、扩展页、被策略禁用的页面注入会失败，忽略即可 */
+    }
+  }
+}
+
 chrome.runtime.onInstalled.addListener(({ reason }) => {
+  injectIntoOpenTabs();
   if (reason === 'install') {
     chrome.tabs.create({ url: chrome.runtime.getURL('options.html') });
   }
