@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>双击关标签 · 设置</title>
+    <link rel="stylesheet" href="ui.css" />
+  </head>
+  <body class="page">
+    <header class="head">
+      <h1>双击关标签</h1>
+      <p class="sub">在页面内容区双击即可关闭当前标签页。</p>
+    </header>
+
+    <main class="card">
+      <section class="row">
+        <div class="row-main">
+          <label class="title" for="enabled">启用双击关闭</label>
+          <p class="hint">关掉后双击恢复浏览器默认行为。</p>
+        </div>
+        <label class="switch">
+          <input id="enabled" type="checkbox" />
+          <span class="slider"></span>
+        </label>
+      </section>
+
+      <section class="row">
+        <div class="row-main">
+          <label class="title" for="keepLastTab">保留最后一个标签</label>
+          <p class="hint">窗口里只剩一个标签时不关闭，避免连窗口一起退出。</p>
+        </div>
+        <label class="switch">
+          <input id="keepLastTab" type="checkbox" />
+          <span class="slider"></span>
+        </label>
+      </section>
+
+      <section class="block">
+        <h2 class="title">触发范围</h2>
+        <label class="radio">
+          <input type="radio" name="mode" value="smart" />
+          <span>
+            <b>智能（推荐）</b>
+            <em>跳过输入框、链接、按钮、代码编辑器；有选中文字时不关闭。</em>
+          </span>
+        </label>
+        <label class="radio">
+          <input type="radio" name="mode" value="anywhere" />
+          <span>
+            <b>任何位置</b>
+            <em>只要不在输入框里，双击页面任意处都关。容易误关，慎用。</em>
+          </span>
+        </label>
+      </section>
+
+      <section class="block">
+        <h2 class="title">站点豁免</h2>
+        <p class="hint">这些域名上不触发。一行一个，写主域名即可覆盖其子域。</p>
+        <textarea id="bypass" rows="6" spellcheck="false" placeholder="example.com&#10;docs.google.com"></textarea>
+        <div class="actions">
+          <button id="saveBypass" class="btn primary" type="button">保存豁免列表</button>
+          <button id="reset" class="btn" type="button">恢复默认</button>
+          <span id="status" class="status" role="status" aria-live="polite"></span>
+        </div>
+      </section>
+    </main>
+
+    <footer class="foot">
+      改完设置立刻生效，不用刷新页面。装好后如果双击没反应，先刷新一下当前网页。
+    </footer>
+
+    <script src="options.js"></script>
+  </body>
+</html>
