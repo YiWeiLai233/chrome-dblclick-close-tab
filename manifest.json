@@ -2,10 +2,10 @@
   "manifest_version": 3,
   "name": "双击关标签（双击关闭当前标签页）",
   "short_name": "双击关标签",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "在页面内容区双击即关闭当前标签页；自动跳过输入框、代码编辑器、视频控件与拖选文字，支持站点豁免和「保留最后一个标签」保护。",
   "minimum_chrome_version": "96",
-  "permissions": ["storage"],
+  "permissions": ["storage", "scripting"],
   "host_permissions": ["http://*/*", "https://*/*"],
   "background": {
     "service_worker": "background.js"
