@@ -29,6 +29,27 @@ function linesToArray(text) {
     .filter(Boolean);
 }
 
+/** 把 commands.getAll() 的结果渲染成「Alt+Shift+W」这样的可读文本 */
+async function renderShortcut() {
+  const el = $('shortcut');
+  try {
+    const cmds = await chrome.commands.getAll();
+    const cmd = cmds.find((c) => c.name === 'close-current-tab');
+    if (!cmd || !cmd.shortcut) {
+      // 快捷键为空通常是被别的扩展或系统占用了
+      el.textContent = '未设置（可能被其他扩展占用，请到 chrome://extensions/shortcuts 重设）';
+      return;
+    }
+    el.textContent = cmd.shortcut
+      .replace(/MacCtrl|Command/gi, '⌘')
+      .replace(/Ctrl/gi, 'Ctrl')
+      .replace(/Alt/gi, 'Alt')
+      .replace(/Shift/gi, 'Shift');
+  } catch (_) {
+    el.textContent = '读取失败';
+  }
+}
+
 async function render() {
   const cfg = await load();
   $('enabled').checked = cfg.enabled !== false;
@@ -39,6 +60,7 @@ async function render() {
   });
   $('bypass').value = (cfg.bypass || []).join('\n');
   $('status').textContent = '';
+  await renderShortcut();
 }
 
 function flash(text) {

@@ -8,10 +8,19 @@
   <body class="page">
     <header class="head">
       <h1>双击关标签</h1>
-      <p class="sub">在页面内容区双击即可关闭当前标签页。</p>
+      <p class="sub">在页面内容区双击即可关闭当前标签页；也可以用快捷键关闭。</p>
     </header>
 
     <main class="card">
+      <section class="row">
+        <div class="row-main">
+          <span class="title">快捷键</span>
+          <p class="hint">
+            当前：<b id="shortcut">读取中…</b><br />
+            可在 <code>chrome://extensions/shortcuts</code> 里改（扩展不能自己打开这个页面，需要手动在地址栏输入）。
+          </p>
+        </div>
+      </section>
       <section class="row">
         <div class="row-main">
           <label class="title" for="enabled">启用双击关闭</label>
