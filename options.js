@@ -1,6 +1,6 @@
 /* 双击关标签 — 设置页 */
 
-const DEFAULTS = { enabled: true, mode: 'smart', keepLastTab: true, bypass: [] };
+const DEFAULTS = { enabled: true, mode: 'smart', keepLastTab: true, bypass: [], debugToast: false };
 
 const $ = (id) => document.getElementById(id);
 
@@ -33,6 +33,7 @@ async function render() {
   const cfg = await load();
   $('enabled').checked = cfg.enabled !== false;
   $('keepLastTab').checked = cfg.keepLastTab !== false;
+  $('debugToast').checked = cfg.debugToast === true;
   document.querySelectorAll('input[name="mode"]').forEach((r) => {
     r.checked = r.value === (cfg.mode === 'anywhere' ? 'anywhere' : 'smart');
   });
@@ -60,6 +61,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('keepLastTab').addEventListener('change', async (e) => {
     await save({ keepLastTab: e.target.checked });
     flash('已保存');
+  });
+
+  $('debugToast').addEventListener('change', async (e) => {
+    await save({ debugToast: e.target.checked });
+    flash(e.target.checked ? '已开启，双击试试' : '已关闭');
   });
 
   document.querySelectorAll('input[name="mode"]').forEach((r) => {
