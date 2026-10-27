@@ -4,11 +4,38 @@
  * 判断逻辑放在内容脚本里，是因为只有它能看见 DOM（焦点在哪个输入框、有没有选中文字）。
  */
 (() => {
-  if (window.__dblclickCloseTabLoaded) return;
+  const BUILD = '1.0.2';
+
+  /* 重新注入时先拆掉自己上一次装的监听。
+   *
+   * 这里曾经用 `if (window.__x) return` 来防重复注入，结果埋了个坑：
+   * 扩展更新（点「重新加载」）后，旧的内容脚本还挂在页面上，但它的
+   * chrome.runtime 已经失效，消息发不出去；此时后台补注入新脚本，
+   * 新脚本看到旧标记就提前退出 —— 页面上只剩一个死监听，双击毫无反应。
+   * 所以现在改成：不因为有旧标记就退出，而是找到上一实例、拆掉它、装上新的。
+   */
+  const prev = window.__dblclickCloseTab;
+  if (prev && typeof prev.destroy === 'function') {
+    try {
+      prev.destroy();
+    } catch (_) {
+      /* 旧实例本身坏掉了就更该继续往下装 */
+    }
+  }
+  // 老版本留下的布尔标记只是噪音，清掉以免干扰判断
   window.__dblclickCloseTabLoaded = true;
 
   const DEFAULTS = { enabled: true, mode: 'smart', bypass: [], debugToast: false };
   let cfg = { ...DEFAULTS };
+
+  /** 扩展被重载后，旧内容脚本的 chrome.runtime 会失效，此时做任何事都没意义 */
+  function alive() {
+    try {
+      return Boolean(chrome && chrome.runtime && chrome.runtime.id);
+    } catch (_) {
+      return false;
+    }
+  }
 
   /* ---------- 配置 ---------- */
 
@@ -23,19 +50,30 @@
     cfg.bypass = normalizeBypass(cfg.bypass);
   }
 
+  function readConfig() {
+    try {
+      chrome.storage.sync.get(DEFAULTS, (v) => {
+        void chrome.runtime.lastError;
+        applyConfig(v);
+      });
+    } catch (_) {
+      /* 上下文已失效，保持默认配置 */
+    }
+  }
+
+  readConfig();
+
+  function onStorageChanged(changes, area) {
+    if (area !== 'sync') return;
+    const next = { ...cfg };
+    for (const [key, { newValue }] of Object.entries(changes)) next[key] = newValue;
+    applyConfig(next);
+  }
+
   try {
-    chrome.storage.sync.get(DEFAULTS, (v) => {
-      void chrome.runtime.lastError;
-      applyConfig(v);
-    });
-    chrome.storage.onChanged.addListener((changes, area) => {
-      if (area !== 'sync') return;
-      const next = { ...cfg };
-      for (const [key, { newValue }] of Object.entries(changes)) next[key] = newValue;
-      applyConfig(next);
-    });
+    chrome.storage.onChanged.addListener(onStorageChanged);
   } catch (_) {
-    /* 扩展被重新加载后旧的 content script 会失去 chrome.*，静默降级为默认配置 */
+    /* 同上 */
   }
 
   function hostBypassed() {
@@ -155,6 +193,11 @@
   /* ---------- 主流程 ---------- */
 
   function onDblClick(ev) {
+    // 扩展重载后的残留脚本：自己摘掉监听，别挡着新注入的实例
+    if (!alive()) {
+      destroy();
+      return;
+    }
     const why = skipReason(ev);
     if (why) {
       if (cfg.debugToast) toast(why);
@@ -175,7 +218,37 @@
     }
   }
 
+  let destroyed = false;
+
+  function destroy() {
+    if (destroyed) return;
+    destroyed = true;
+    try {
+      window.removeEventListener('mousedown', snapshotSelection, true);
+      window.removeEventListener('dblclick', onDblClick, true);
+    } catch (_) {}
+    try {
+      chrome.storage.onChanged.removeListener(onStorageChanged);
+    } catch (_) {}
+    if (window.__dblclickCloseTab === api) delete window.__dblclickCloseTab;
+  }
+
+  const api = { build: BUILD, destroy, alive };
+
   // 捕获阶段监听：页面自己的 dblclick 处理器没法把这个事件藏起来
   window.addEventListener('mousedown', snapshotSelection, true);
   window.addEventListener('dblclick', onDblClick, true);
+
+  // 给后台/弹窗留一个探针，用来回答「这个页面到底注入成功没有」
+  window.__dblclickCloseTab = api;
+
+  try {
+    chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+      if (!msg || msg.type !== 'dblclick-ping') return undefined;
+      sendResponse({ ok: true, build: BUILD });
+      return undefined;
+    });
+  } catch (_) {
+    /* 上下文失效，探针自然也不会被调用 */
+  }
 })();
