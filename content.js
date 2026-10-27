@@ -7,7 +7,7 @@
   if (window.__dblclickCloseTabLoaded) return;
   window.__dblclickCloseTabLoaded = true;
 
-  const DEFAULTS = { enabled: true, mode: 'smart', bypass: [] };
+  const DEFAULTS = { enabled: true, mode: 'smart', bypass: [], debugToast: false };
   let cfg = { ...DEFAULTS };
 
   /* ---------- 配置 ---------- */
@@ -86,26 +86,29 @@
     selectionBeforeDblclick = hasTextSelection();
   }
 
-  function shouldClose(ev) {
-    if (!cfg.enabled || hostBypassed()) return false;
-    if (ev.defaultPrevented) return false;
+  /* 返回 null 表示该关；否则返回一句「为什么没关」，调试模式下会显示给用户。
+   * 「无法双击关闭」是最难自查的一类问题，把原因说出来比让用户猜强。 */
+  function skipReason(ev) {
+    if (!cfg.enabled) return '扩展已停用';
+    if (hostBypassed()) return '当前站点已豁免';
+    if (ev.defaultPrevented) return '页面已取消这次双击';
     // 按住修饰键的双击是刻意操作，不去抢
-    if (ev.ctrlKey || ev.shiftKey || ev.altKey || ev.metaKey) return false;
+    if (ev.ctrlKey || ev.shiftKey || ev.altKey || ev.metaKey) return '按住了修饰键';
 
     const target = ev.target instanceof Element ? ev.target : ev.target && ev.target.parentElement;
-    if (!target) return false;
+    if (!target) return '找不到双击目标';
 
     // 输入类控件：双击是选词，绝不能关页面
     const tag = target.tagName.toLowerCase();
-    if (SKIP_TAGS.has(tag)) return false;
-    if (inEditable(target)) return false;
+    if (SKIP_TAGS.has(tag)) return `命中了 <${tag}> 控件`;
+    if (inEditable(target)) return '命中了编辑器';
 
     if (cfg.mode !== 'anywhere') {
-      if (selectionBeforeDblclick) return false;
-      if (target.closest(INTERACTIVE_SELECTORS)) return false;
+      if (selectionBeforeDblclick) return '双击前已有选中文字';
+      if (target.closest(INTERACTIVE_SELECTORS)) return '命中了可交互元素';
     }
 
-    return true;
+    return null;
   }
 
   /* ---------- 轻提示（只在没关成功时出现，比如最后一个标签） ---------- */
@@ -152,12 +155,20 @@
   /* ---------- 主流程 ---------- */
 
   function onDblClick(ev) {
-    if (!shouldClose(ev)) return;
+    const why = skipReason(ev);
+    if (why) {
+      if (cfg.debugToast) toast(why);
+      return;
+    }
     try {
       chrome.runtime.sendMessage({ type: 'dblclick-close' }, (res) => {
-        if (chrome.runtime.lastError) return; // 扩展已更新/页面已关，忽略
+        if (chrome.runtime.lastError) {
+          if (cfg.debugToast) toast('后台无响应，试着重载扩展');
+          return; // 扩展已更新/页面已关，忽略
+        }
         if (!res || res.ok) return;
         if (res.reason === 'last-tab') toast('已保留最后一个标签页');
+        else if (cfg.debugToast) toast(`没关成：${res.reason}`);
       });
     } catch (_) {
       /* 扩展刚被重新加载，本次双击直接放弃 */
