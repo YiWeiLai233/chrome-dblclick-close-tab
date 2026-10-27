@@ -201,6 +201,14 @@ async function main() {
   }
   if (!version) throw new Error('CDP 没起来，Chrome 可能启动失败');
 
+  const base = `http://127.0.0.1:${APP_PORT}/`;
+
+  // 先开一个页面，再装扩展：模拟「扩展装好之前就开着的标签」。
+  // 这类标签里没有 content script，必须靠 background 的补注入才能双击生效，
+  // 否则用户装完扩展发现双击没反应。
+  const preTab = await newTab(base);
+  await sleep(300);
+
   // 用浏览器级 CDP 装载未打包扩展
   const browser = new Session(version.webSocketDebuggerUrl);
   const loaded = await browser.send('Extensions.loadUnpacked', { path: EXT });
@@ -208,15 +216,26 @@ async function main() {
     throw new Error(`Extensions.loadUnpacked 失败：${JSON.stringify(loaded.error)}`);
   }
   console.log(`扩展已装载 id=${loaded.result.id}`);
-  await sleep(1500);
+  await sleep(2000); // 等 onInstalled 补注入跑完
   await closeExtensionTabs();
-
-  const base = `http://127.0.0.1:${APP_PORT}/`;
 
   try {
     // 常驻标签，保证被测标签不是窗口里唯一的那个
     await newTab('about:blank');
     await sleep(400);
+
+    // 0. 扩展装之前就开着的标签 → 补注入之后也应能双击关闭
+    {
+      const s = new Session(preTab.webSocketDebuggerUrl);
+      await s.send('Runtime.enable');
+      await sleep(300);
+      const p = await centerOf(s, '#text');
+      await doubleClick(s, p.x, p.y);
+      await sleep(700);
+      const alive = await tabAlive(preTab.id);
+      record('装扩展前已打开的标签也能双击关闭', !alive, alive ? '补注入没生效' : '');
+      s.close();
+    }
 
     // 1. 正文双击 → 关
     {
