@@ -1,0 +1,41 @@
+{
+  "manifest_version": 3,
+  "name": "双击关标签（双击关闭当前标签页）",
+  "short_name": "双击关标签",
+  "version": "1.0.0",
+  "description": "在页面内容区双击即关闭当前标签页；自动跳过输入框、代码编辑器、视频控件与拖选文字，支持站点豁免和「保留最后一个标签」保护。",
+  "minimum_chrome_version": "96",
+  "permissions": ["storage"],
+  "host_permissions": ["http://*/*", "https://*/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "action": {
+    "default_title": "双击关标签",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
