@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "双击关标签（双击关闭当前标签页）",
   "short_name": "双击关标签",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "在页面内容区双击即关闭当前标签页；自动跳过输入框、代码编辑器、视频控件与拖选文字，支持站点豁免和「保留最后一个标签」保护。",
   "minimum_chrome_version": "96",
   "permissions": ["storage", "scripting"],
@@ -26,6 +26,15 @@
       "32": "icons/icon32.png",
       "48": "icons/icon48.png",
       "128": "icons/icon128.png"
+    }
+  },
+  "commands": {
+    "close-current-tab": {
+      "suggested_key": {
+        "default": "Alt+Shift+W",
+        "mac": "Alt+Shift+W"
+      },
+      "description": "关闭当前标签页（快捷键通道）"
     }
   },
   "options_ui": {

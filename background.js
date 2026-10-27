@@ -2,6 +2,9 @@
  *
  * 内容脚本只负责判断「这一下双击该不该算」，真正的关标签动作在这里做：
  * 内容脚本所在的网页上下文没有 chrome.tabs 权限，也不应该拿到。
+ *
+ * 另外一个职责是「让已经开着的标签也能用」：扩展装上/更新后，之前就在的页面
+ * 里并没有新的内容脚本，用户不会想到先去刷新，只会觉得「装了没用」。
  */
 
 const DEFAULTS = {
@@ -10,6 +13,8 @@ const DEFAULTS = {
   keepLastTab: true, // 窗口里只剩一个标签时不关，避免连窗口一起没了
   bypass: [], // 站点豁免，域名后缀列表
 };
+
+const INJECTABLE = /^https?:\/\//i;
 
 function getConfig() {
   return new Promise((resolve) => {
@@ -46,48 +51,136 @@ async function closeTab(tabId, windowId) {
   }
 }
 
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (!msg || msg.type !== 'dblclick-close') return undefined;
-
-  const tab = sender.tab;
-  if (!tab || tab.id == null) {
-    sendResponse({ ok: false, reason: 'no-tab' });
-    return true;
-  }
-
-  closeTab(tab.id, tab.windowId).then(sendResponse, (err) =>
-    sendResponse({ ok: false, reason: 'error', message: String(err) }),
-  );
-  return true; // 异步回复
-});
-
-/* 把内容脚本补注入到已经打开的页面。
+/* 页面里那份内容脚本还活着吗？
  *
- * 扩展刚装上或刚更新时，之前就开着的标签里没有 content script，双击自然没反应，
- * 而用户几乎不会想到「先去刷新一下页面」。这里主动补一次，content.js 里有
- * __dblclickCloseTabLoaded 兜底，重复注入是安全的。
+ * 扩展重载之后，旧页面里的内容脚本还挂着监听，但它的 chrome.runtime 已经失效，
+ * 双击发不出消息 —— 表现就是「更新了扩展，双击还是没反应」。所以不能只看
+ * 「注入过没有」，要看「注入的那一份现在还喘气吗」。
  */
-async function injectIntoOpenTabs() {
+async function probe(tabId) {
+  try {
+    const [r] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        const api = window.__dblclickCloseTab;
+        return Boolean(api && typeof api.alive === 'function' && api.alive());
+      },
+    });
+    return Boolean(r && r.result);
+  } catch (_) {
+    return false; // 注入不进去（chrome://、商店页、被策略禁用）就当没有
+  }
+}
+
+async function inject(tabId) {
+  try {
+    await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+/** 保证某个标签里有可用的内容脚本；返回是否真的注入了 */
+async function ensureInjected(tabId) {
+  if (tabId == null) return false;
+  if (await probe(tabId)) return false;
+  return inject(tabId);
+}
+
+/** 把所有普通网页标签补一遍 */
+async function injectAll() {
   if (!chrome.scripting || !chrome.scripting.executeScript) return;
   let tabs = [];
   try {
-    tabs = await chrome.tabs.query({ url: ['http://*/*', 'https://*/*'] });
+    tabs = await chrome.tabs.query({});
   } catch (_) {
     return;
   }
   for (const tab of tabs) {
     if (tab.id == null || tab.discarded) continue;
-    try {
-      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
-    } catch (_) {
-      /* chrome:// 、扩展页、被策略禁用的页面注入会失败，忽略即可 */
-    }
+    if (!INJECTABLE.test(tab.url || '')) continue;
+    await ensureInjected(tab.id);
   }
 }
 
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (!msg) return undefined;
+
+  if (msg.type === 'dblclick-close') {
+    const tab = sender.tab;
+    if (!tab || tab.id == null) {
+      sendResponse({ ok: false, reason: 'no-tab' });
+      return true;
+    }
+    closeTab(tab.id, tab.windowId).then(sendResponse, (err) =>
+      sendResponse({ ok: false, reason: 'error', message: String(err) }),
+    );
+    return true; // 异步回复
+  }
+
+  // 弹窗/设置页点开时顺手把当前页修一遍，给用户一条不用刷新页面的自救路径
+  if (msg.type === 'ensure-inject') {
+    (async () => {
+      let tabId = msg.tabId;
+      if (tabId == null) {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        tabId = tab && tab.id;
+      }
+      const injected = await ensureInjected(tabId);
+      sendResponse({ ok: true, injected });
+    })();
+    return true;
+  }
+
+  if (msg.type === 'inject-all') {
+    injectAll().then(() => sendResponse({ ok: true }));
+    return true;
+  }
+
+  return undefined;
+});
+
 chrome.runtime.onInstalled.addListener(({ reason }) => {
-  injectIntoOpenTabs();
+  injectAll();
   if (reason === 'install') {
     chrome.tabs.create({ url: chrome.runtime.getURL('options.html') });
   }
+});
+
+chrome.runtime.onStartup.addListener(() => {
+  injectAll();
+});
+
+/* 快捷键通道。
+ *
+ * 为什么需要它：浏览器扩展拿不到标签栏（tab strip）上的鼠标事件 —— 那是浏览器
+ * 自己的 UI，不在任何扩展能监听的范围内（Firefox 有 tabs.closeTabByDblclick，
+ * Chrome/Edge 没有对应能力）。所以「在标签栏双击关闭」这件事，纯扩展做不到。
+ * 能替代的是浏览器级快捷键：commands 由浏览器自己派发，不受页面脚本干扰，
+ * 在页面、弹窗、开发者工具里都生效。
+ */
+chrome.commands.onCommand.addListener((command) => {
+  if (command !== 'close-current-tab') return;
+  closeActiveTab();
+});
+
+async function closeActiveTab() {
+  let tab = null;
+  try {
+    [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  } catch (_) {
+    return;
+  }
+  if (!tab || tab.id == null) return;
+  await closeTab(tab.id, tab.windowId);
+}
+
+/* 兜底自愈：页面加载完成后确认一下脚本还在。
+ * 正常情况下清单里的 content_scripts 已经注入了，probe 会返回 true，什么都不做；
+ * 只有真的缺了才补一次。代价是每个页面一次极轻的 executeScript。 */
+chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
+  if (info.status !== 'complete') return;
+  if (!INJECTABLE.test(tab.url || '')) return;
+  ensureInjected(tabId);
 });
