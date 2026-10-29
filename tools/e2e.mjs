@@ -67,6 +67,7 @@ class Session {
     this.id = 0;
     this.pending = new Map();
     this.listeners = [];
+    this.contexts = []; // Runtime.executionContextCreated 记录，用来找内容脚本所在的隔离世界
     this.ws = new WebSocket(wsUrl);
     this.ready = new Promise((r) => this.ws.addEventListener('open', r, { once: true }));
     this.ws.addEventListener('message', (ev) => {
@@ -76,17 +77,31 @@ class Session {
         this.pending.delete(m.id);
         return;
       }
+      if (m.method === 'Runtime.executionContextCreated') {
+        this.contexts.push(m.params.context);
+      } else if (m.method === 'Runtime.executionContextDestroyed') {
+        this.contexts = this.contexts.filter((c) => c.id !== m.params.executionContextId);
+      } else if (m.method === 'Runtime.executionContextsCleared') {
+        this.contexts = [];
+      }
       for (const fn of this.listeners) fn(m);
     });
   }
   on(fn) {
     this.listeners.push(fn);
   }
-  async send(method, params = {}) {
+  async send(method, params = {}, timeoutMs = 15000) {
     await this.ready;
     const mid = ++this.id;
     this.ws.send(JSON.stringify({ id: mid, method, params }));
-    return new Promise((res) => this.pending.set(mid, res));
+    // 没有超时的 send 一旦对面不回就一直挂着，整个测试静默卡死 —— 宁可报错也不要挂
+    return Promise.race([
+      new Promise((res) => this.pending.set(mid, res)),
+      sleep(timeoutMs).then(() => {
+        this.pending.delete(mid);
+        throw new Error(`CDP ${method} 超时 ${timeoutMs}ms`);
+      }),
+    ]);
   }
   async evaluate(expression, contextId) {
     const r = await this.send('Runtime.evaluate', {
@@ -98,6 +113,20 @@ class Session {
     if (r.result?.exceptionDetails) throw new Error(JSON.stringify(r.result.exceptionDetails).slice(0, 300));
     return r.result?.result?.value;
   }
+
+  /* 内容脚本跑在扩展的隔离世界里，主世界的 window 上看不到它的任何东西。
+   * 要检查「页面里那份脚本是哪个版本」，必须拿到隔离世界的执行上下文再求值。 */
+  extensionContext(extId) {
+    const origin = `chrome-extension://${extId}`;
+    return this.contexts.filter((c) => c.origin === origin).pop() || null;
+  }
+
+  async evaluateInExtension(extId, expression) {
+    const ctx = this.extensionContext(extId);
+    if (!ctx) throw new Error(`没找到扩展 ${extId} 的隔离世界上下文`);
+    return this.evaluate(expression, ctx.id);
+  }
+
   close() {
     try {
       this.ws.close();
@@ -371,6 +400,68 @@ async function main() {
 
     // 恢复默认，别把测试用的设置留在用户的同步存储里
     await setConfig(extId, { dblclickMs: 400 });
+
+    // 9. 页面里跑着旧版本的脚本 → 补注入应当把它换掉
+    //    这条防的是「升级扩展后老页面还在跑旧逻辑」：旧脚本活着，只看存活状态会误判。
+    {
+      const { tab, s } = await openAndAttach(base);
+
+      // 内容脚本在扩展的隔离世界里，主世界看不到它，必须去隔离世界改
+      // 伪装成一份「活着但版本很旧」的内容脚本
+      const before = await s.evaluateInExtension(
+        extId,
+        `(() => {
+          window.__dblclickCloseTab = {
+            build: '0.0.0-old',
+            alive: () => true,
+            destroy: () => {},
+          };
+          return window.__dblclickCloseTab.build;
+        })()`,
+      );
+
+      // 让 background 对这个标签做「保证注入」，走 ensure-inject 通道。
+      //
+      // 这里不能用 CDP 的 target id —— 它是十六进制字符串，和 chrome.tabs 的数字 id
+      // 完全不是一个东西。改成在扩展侧按「哪个标签里跑着 0.0.0-old」反查真实 tabId：
+      // 前面每个用例都留下了标签，只有被伪装过的那个会返回旧版本号。
+      const optTab = await newTab(`chrome-extension://${extId}/options.html`);
+      const os = new Session(optTab.webSocketDebuggerUrl);
+      await os.send('Runtime.enable');
+      await sleep(400);
+      const injected = await os.evaluate(`(async () => {
+        const tabs = await chrome.tabs.query({ url: ${JSON.stringify(base + '*')} });
+        let target = null;
+        for (const t of tabs) {
+          try {
+            const [r] = await chrome.scripting.executeScript({
+              target: { tabId: t.id },
+              func: () => (window.__dblclickCloseTab || {}).build,
+            });
+            if (r && r.result === '0.0.0-old') {
+              target = t.id;
+              break;
+            }
+          } catch (_) {}
+        }
+        if (target == null) return { error: '没找到跑着旧脚本的标签', candidates: tabs.length };
+        const res = await new Promise((r) =>
+          chrome.runtime.sendMessage({ type: 'ensure-inject', tabId: target }, (x) => r(x)),
+        );
+        return { tabId: target, res };
+      })()`);
+      os.close();
+      await fetch(`http://127.0.0.1:${CDP_PORT}/json/close/${optTab.id}`);
+      await sleep(700);
+
+      const after = await s.evaluateInExtension(extId, 'window.__dblclickCloseTab.build');
+      record(
+        '旧版本内容脚本会被替换成当前版本',
+        before === '0.0.0-old' && after !== '0.0.0-old' && Boolean(after),
+        `注入前=${before} 注入后=${after} 后台返回=${JSON.stringify(injected)}`,
+      );
+      s.close();
+    }
   } finally {
     browser.close();
     chrome.kill();
