@@ -105,11 +105,16 @@ class Session {
   }
 }
 
-/** 在页面坐标 (x,y) 处派发一次真实双击 */
-async function doubleClick(s, x, y) {
+/** 在页面坐标 (x,y) 处派发两次点击，中间隔 gap 毫秒。
+ *
+ * 扩展自己配对两次点击（不用原生 dblclick），所以这里只要真的隔 gap 再按第二下，
+ * 就能测「双击间隔上限」这个设置。
+ */
+async function doubleClick(s, x, y, gap = 60) {
   const base = { x, y, button: 'left' };
   await s.send('Input.dispatchMouseEvent', { ...base, buttons: 1, clickCount: 1, type: 'mousePressed' });
   await s.send('Input.dispatchMouseEvent', { ...base, buttons: 0, clickCount: 1, type: 'mouseReleased' });
+  await sleep(gap);
   await s.send('Input.dispatchMouseEvent', { ...base, buttons: 1, clickCount: 2, type: 'mousePressed' });
   await s.send('Input.dispatchMouseEvent', { ...base, buttons: 0, clickCount: 2, type: 'mouseReleased' });
 }
@@ -121,6 +126,20 @@ async function openAndAttach(url) {
   await s.send('Runtime.enable');
   await sleep(700); // 等 content script 注入
   return { tab, s };
+}
+
+/** 通过扩展自己的设置页写 storage.sync，模拟用户在设置界面改值 */
+async function setConfig(extId, patch) {
+  const tab = await newTab(`chrome-extension://${extId}/options.html`);
+  const s = new Session(tab.webSocketDebuggerUrl);
+  await s.send('Runtime.enable');
+  await sleep(400);
+  await s.evaluate(
+    `new Promise((r) => chrome.storage.sync.set(${JSON.stringify(patch)}, () => r(true)))`,
+  );
+  s.close();
+  await fetch(`http://127.0.0.1:${CDP_PORT}/json/close/${tab.id}`);
+  await sleep(300);
 }
 
 async function centerOf(s, selector) {
@@ -215,7 +234,8 @@ async function main() {
   if (!loaded.result?.id) {
     throw new Error(`Extensions.loadUnpacked 失败：${JSON.stringify(loaded.error)}`);
   }
-  console.log(`扩展已装载 id=${loaded.result.id}`);
+  const extId = loaded.result.id;
+  console.log(`扩展已装载 id=${extId}`);
   await sleep(2000); // 等 onInstalled 补注入跑完
   await closeExtensionTabs();
 
@@ -324,6 +344,33 @@ async function main() {
       }
       s.close();
     }
+
+    // 7. 自定义双击间隔：间隔小于上限 → 关
+    {
+      await setConfig(extId, { dblclickMs: 600 });
+      const { tab, s } = await openAndAttach(base);
+      const p = await centerOf(s, '#text');
+      await doubleClick(s, p.x, p.y, 250);
+      await sleep(900);
+      const alive = await tabAlive(tab.id);
+      record('间隔 250ms < 上限 600ms 时关闭', !alive, alive ? '标签仍然存在' : '');
+      s.close();
+    }
+
+    // 8. 自定义双击间隔：间隔超过上限 → 不关
+    {
+      await setConfig(extId, { dblclickMs: 200 });
+      const { tab, s } = await openAndAttach(base);
+      const p = await centerOf(s, '#text');
+      await doubleClick(s, p.x, p.y, 550);
+      await sleep(900);
+      const alive = await tabAlive(tab.id);
+      record('间隔 550ms > 上限 200ms 时不关闭', alive, alive ? '' : '标签被误关');
+      s.close();
+    }
+
+    // 恢复默认，别把测试用的设置留在用户的同步存储里
+    await setConfig(extId, { dblclickMs: 400 });
   } finally {
     browser.close();
     chrome.kill();
