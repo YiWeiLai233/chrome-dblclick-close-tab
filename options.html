@@ -34,6 +34,20 @@
 
       <section class="row">
         <div class="row-main">
+          <label class="title" for="dblclickMs">双击间隔上限</label>
+          <p class="hint">
+            两次点击的间隔小于这个值才算一次双击。调小更不容易误触，调大能容忍手慢。<br />
+            注意：浏览器自己的双击判定阈值改不了，所以这个值只对本扩展生效。
+          </p>
+        </div>
+        <div class="ms-control">
+          <input id="dblclickMs" type="range" min="120" max="1000" step="20" />
+          <output id="dblclickMsOut" for="dblclickMs">400 ms</output>
+        </div>
+      </section>
+
+      <section class="row">
+        <div class="row-main">
           <label class="title" for="keepLastTab">保留最后一个标签</label>
           <p class="hint">窗口里只剩一个标签时不关闭，避免连窗口一起退出。</p>
         </div>

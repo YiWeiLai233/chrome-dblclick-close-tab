@@ -1,6 +1,22 @@
 /* 双击关标签 — 设置页 */
 
-const DEFAULTS = { enabled: true, mode: 'smart', keepLastTab: true, bypass: [], debugToast: false };
+const DEFAULTS = {
+  enabled: true,
+  mode: 'smart',
+  keepLastTab: true,
+  bypass: [],
+  debugToast: false,
+  dblclickMs: 400,
+};
+
+const MS_MIN = 120;
+const MS_MAX = 1000;
+
+function clampMs(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return DEFAULTS.dblclickMs;
+  return Math.min(MS_MAX, Math.max(MS_MIN, Math.round(n)));
+}
 
 const $ = (id) => document.getElementById(id);
 
@@ -59,8 +75,16 @@ async function render() {
     r.checked = r.value === (cfg.mode === 'anywhere' ? 'anywhere' : 'smart');
   });
   $('bypass').value = (cfg.bypass || []).join('\n');
+  renderMs(cfg.dblclickMs);
   $('status').textContent = '';
   await renderShortcut();
+}
+
+/** 把当前间隔画到滑块和读数上 */
+function renderMs(value) {
+  const ms = clampMs(value);
+  $('dblclickMs').value = String(ms);
+  $('dblclickMsOut').textContent = `${ms} ms`;
 }
 
 function flash(text) {
@@ -88,6 +112,18 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('debugToast').addEventListener('change', async (e) => {
     await save({ debugToast: e.target.checked });
     flash(e.target.checked ? '已开启，双击试试' : '已关闭');
+  });
+
+  // 拖动过程中只更新读数，松手（change）才写存储，避免每次 input 都打一次 sync
+  $('dblclickMs').addEventListener('input', (e) => {
+    $('dblclickMsOut').textContent = `${clampMs(e.target.value)} ms`;
+  });
+
+  $('dblclickMs').addEventListener('change', async (e) => {
+    const ms = clampMs(e.target.value);
+    renderMs(ms);
+    await save({ dblclickMs: ms });
+    flash(`双击间隔已设为 ${ms} ms`);
   });
 
   document.querySelectorAll('input[name="mode"]').forEach((r) => {

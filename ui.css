@@ -190,6 +190,28 @@ body {
   outline-offset: 2px;
 }
 
+/* 双击间隔滑块 */
+
+.ms-control {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.ms-control input[type="range"] {
+  width: 130px;
+  accent-color: var(--accent);
+}
+
+.ms-control output {
+  min-width: 58px;
+  font: 13px/1 ui-monospace, Consolas, "Cascadia Mono", monospace;
+  color: var(--muted);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
 @media (prefers-color-scheme: dark) {
   .slider {
     background: #3a404b;
