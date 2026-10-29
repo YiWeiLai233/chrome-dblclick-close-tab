@@ -51,11 +51,15 @@ async function closeTab(tabId, windowId) {
   }
 }
 
-/* 页面里那份内容脚本还活着吗？
+/* 页面里那份内容脚本还活着吗？版本对不对？
  *
  * 扩展重载之后，旧页面里的内容脚本还挂着监听，但它的 chrome.runtime 已经失效，
  * 双击发不出消息 —— 表现就是「更新了扩展，双击还是没反应」。所以不能只看
  * 「注入过没有」，要看「注入的那一份现在还喘气吗」。
+ *
+ * 光看「喘气」还不够：升级到新版本后，旧脚本活得好好的，probe 返回 true，
+ * 补注入就被跳过了，页面里跑的仍然是老逻辑（比如不支持自定义双击间隔）。
+ * 所以把它的 BUILD 和清单版本比一比，不一致就重新注入。
  */
 async function probe(tabId) {
   try {
@@ -63,12 +67,13 @@ async function probe(tabId) {
       target: { tabId },
       func: () => {
         const api = window.__dblclickCloseTab;
-        return Boolean(api && typeof api.alive === 'function' && api.alive());
+        if (!api || typeof api.alive !== 'function' || !api.alive()) return null;
+        return typeof api.build === 'string' ? api.build : '';
       },
     });
-    return Boolean(r && r.result);
+    return r ? r.result : null; // null 表示没有可用脚本；字符串是它的版本
   } catch (_) {
-    return false; // 注入不进去（chrome://、商店页、被策略禁用）就当没有
+    return null; // 注入不进去（chrome://、商店页、被策略禁用）就当没有
   }
 }
 
@@ -81,10 +86,11 @@ async function inject(tabId) {
   }
 }
 
-/** 保证某个标签里有可用的内容脚本；返回是否真的注入了 */
+/** 保证某个标签里跑的是当前版本的内容脚本；返回是否真的注入了 */
 async function ensureInjected(tabId) {
   if (tabId == null) return false;
-  if (await probe(tabId)) return false;
+  const build = await probe(tabId);
+  if (build === chrome.runtime.getManifest().version) return false;
   return inject(tabId);
 }
 
