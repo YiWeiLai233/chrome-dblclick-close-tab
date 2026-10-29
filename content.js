@@ -4,7 +4,7 @@
  * 判断逻辑放在内容脚本里，是因为只有它能看见 DOM（焦点在哪个输入框、有没有选中文字）。
  */
 (() => {
-  const BUILD = '1.0.2';
+  const BUILD = '1.2.0';
 
   /* 重新注入时先拆掉自己上一次装的监听。
    *
@@ -25,7 +25,7 @@
   // 老版本留下的布尔标记只是噪音，清掉以免干扰判断
   window.__dblclickCloseTabLoaded = true;
 
-  const DEFAULTS = { enabled: true, mode: 'smart', bypass: [], debugToast: false };
+  const DEFAULTS = { enabled: true, mode: 'smart', bypass: [], debugToast: false, dblclickMs: 400 };
   let cfg = { ...DEFAULTS };
 
   /** 扩展被重载后，旧内容脚本的 chrome.runtime 会失效，此时做任何事都没意义 */
@@ -45,9 +45,26 @@
       .filter(Boolean);
   }
 
+  /* 双击间隔上限。
+   *
+   * 浏览器原生 dblclick 的判定阈值由操作系统决定（Windows 默认 500ms），页面脚本
+   * 改不了，也不该改。于是这里干脆不用原生 dblclick：自己配对两次 mousedown，
+   * 间隔小于 dblclickMs 才算一次双击。这样用户要的「自定义间隔」才有可能实现，
+   * 顺便也绕开了「系统设置比我想要的慢/快」的问题。
+   */
+  const MS_MIN = 120;
+  const MS_MAX = 1000;
+
+  function normalizeMs(v) {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return DEFAULTS.dblclickMs;
+    return Math.min(MS_MAX, Math.max(MS_MIN, Math.round(n)));
+  }
+
   function applyConfig(raw) {
     cfg = { ...DEFAULTS, ...(raw || {}) };
     cfg.bypass = normalizeBypass(cfg.bypass);
+    cfg.dblclickMs = normalizeMs(cfg.dblclickMs);
   }
 
   function readConfig() {
@@ -114,22 +131,14 @@
     return Boolean(sel && !sel.isCollapsed && String(sel).trim().length > 0);
   }
 
-  // 双击本身就会选中一个词：浏览器在第二次 mousedown 时已经把选区做好，
-  // 到 dblclick 阶段再查 getSelection() 必然非空。所以要在「双击开始前」
-  // 的那次 mousedown（detail === 1）上取快照，否则一次都关不掉。
-  let selectionBeforeDblclick = false;
-
-  function snapshotSelection(ev) {
-    if (ev.detail !== 1) return;
-    selectionBeforeDblclick = hasTextSelection();
-  }
-
   /* 返回 null 表示该关；否则返回一句「为什么没关」，调试模式下会显示给用户。
-   * 「无法双击关闭」是最难自查的一类问题，把原因说出来比让用户猜强。 */
-  function skipReason(ev) {
+   * 「无法双击关闭」是最难自查的一类问题，把原因说出来比让用户猜强。
+   *
+   * selectionBefore 由双击配对逻辑传进来：必须是「第一次点击之前」的选区状态，
+   * 因为第二次 mousedown 时浏览器已经把词选好了。 */
+  function skipReason(ev, selectionBefore) {
     if (!cfg.enabled) return '扩展已停用';
     if (hostBypassed()) return '当前站点已豁免';
-    if (ev.defaultPrevented) return '页面已取消这次双击';
     // 按住修饰键的双击是刻意操作，不去抢
     if (ev.ctrlKey || ev.shiftKey || ev.altKey || ev.metaKey) return '按住了修饰键';
 
@@ -142,12 +151,89 @@
     if (inEditable(target)) return '命中了编辑器';
 
     if (cfg.mode !== 'anywhere') {
-      if (selectionBeforeDblclick) return '双击前已有选中文字';
+      if (selectionBefore) return '双击前已有选中文字';
       if (target.closest(INTERACTIVE_SELECTORS)) return '命中了可交互元素';
     }
 
     return null;
   }
+
+  /* ---------- 双击配对（自己算间隔，不用浏览器原生的 dblclick） ---------- */
+
+  /* 原生 dblclick 的等待上限由系统设定决定（Windows 默认 500ms），页面脚本拿不到、
+   * 也改不了。所以这里自己配对两次 mousedown：间隔 <= cfg.dblclickMs 才算双击。
+   *
+   * 另一个必须自己配对的理由：「双击前已有选中文字就不关」这条判断依赖
+   * 「双击开始前」的选区状态，而浏览器在第二次 mousedown 时就已经把词选好了，
+   * 到 dblclick 阶段再看 getSelection() 必然非空。所以在第一次 mousedown 上取快照。
+   */
+  let pending = null; // { t, x, y, selectionBefore }
+
+  // 两次点击位置差太多就不算同一次双击（防止按住拖选时误判）
+  const SAME_SPOT = 12;
+
+  function onMouseDown(ev) {
+    // 扩展重载后的残留脚本：自己摘掉监听，别挡着新注入的实例
+    if (!alive()) {
+      destroy();
+      return;
+    }
+    if (ev.button !== 0) return; // 只认左键
+
+    const now = ev.timeStamp;
+    const sameSpot =
+      pending && Math.abs(ev.clientX - pending.x) <= SAME_SPOT && Math.abs(ev.clientY - pending.y) <= SAME_SPOT;
+    const matched = sameSpot && now - pending.t <= cfg.dblclickMs;
+
+    if (!matched) {
+      // 记下这一次，等下一次点击来配对
+      pending = { t: now, x: ev.clientX, y: ev.clientY, selectionBefore: hasTextSelection() };
+      return;
+    }
+
+    const selectionBefore = pending.selectionBefore;
+    pending = null;
+
+    // 双击本身已经让浏览器选好了词，所以「有没有选中文字」只能看第一次点击前的快照
+    const why = skipReason(ev, selectionBefore);
+    if (why) {
+      if (cfg.debugToast) toast(why);
+      return;
+    }
+
+    try {
+      chrome.runtime.sendMessage({ type: 'dblclick-close' }, (res) => {
+        if (chrome.runtime.lastError) {
+          if (cfg.debugToast) toast('后台无响应，试着重载扩展');
+          return; // 扩展已更新/页面已关，忽略
+        }
+        if (!res || res.ok) return;
+        if (res.reason === 'last-tab') toast('已保留最后一个标签页');
+        else if (cfg.debugToast) toast(`没关成：${res.reason}`);
+      });
+    } catch (_) {
+      /* 扩展刚被重新加载，本次双击直接放弃 */
+    }
+  }
+
+  let destroyed = false;
+
+  function destroy() {
+    if (destroyed) return;
+    destroyed = true;
+    try {
+      window.removeEventListener('mousedown', onMouseDown, true);
+    } catch (_) {}
+    try {
+      chrome.storage.onChanged.removeListener(onStorageChanged);
+    } catch (_) {}
+    if (window.__dblclickCloseTab === api) delete window.__dblclickCloseTab;
+  }
+
+  const api = { build: BUILD, destroy, alive };
+
+  // 捕获阶段监听：页面自己的 mousedown 处理器没法把这个事件藏起来
+  window.addEventListener('mousedown', onMouseDown, true);
 
   /* ---------- 轻提示（只在没关成功时出现，比如最后一个标签） ---------- */
 
@@ -192,52 +278,8 @@
 
   /* ---------- 主流程 ---------- */
 
-  function onDblClick(ev) {
-    // 扩展重载后的残留脚本：自己摘掉监听，别挡着新注入的实例
-    if (!alive()) {
-      destroy();
-      return;
-    }
-    const why = skipReason(ev);
-    if (why) {
-      if (cfg.debugToast) toast(why);
-      return;
-    }
-    try {
-      chrome.runtime.sendMessage({ type: 'dblclick-close' }, (res) => {
-        if (chrome.runtime.lastError) {
-          if (cfg.debugToast) toast('后台无响应，试着重载扩展');
-          return; // 扩展已更新/页面已关，忽略
-        }
-        if (!res || res.ok) return;
-        if (res.reason === 'last-tab') toast('已保留最后一个标签页');
-        else if (cfg.debugToast) toast(`没关成：${res.reason}`);
-      });
-    } catch (_) {
-      /* 扩展刚被重新加载，本次双击直接放弃 */
-    }
-  }
-
-  let destroyed = false;
-
-  function destroy() {
-    if (destroyed) return;
-    destroyed = true;
-    try {
-      window.removeEventListener('mousedown', snapshotSelection, true);
-      window.removeEventListener('dblclick', onDblClick, true);
-    } catch (_) {}
-    try {
-      chrome.storage.onChanged.removeListener(onStorageChanged);
-    } catch (_) {}
-    if (window.__dblclickCloseTab === api) delete window.__dblclickCloseTab;
-  }
-
-  const api = { build: BUILD, destroy, alive };
-
-  // 捕获阶段监听：页面自己的 dblclick 处理器没法把这个事件藏起来
-  window.addEventListener('mousedown', snapshotSelection, true);
-  window.addEventListener('dblclick', onDblClick, true);
+  /* 上面的 onMouseDown 在配对成功时已经做完判断与发消息，所以这里没有 dblclick
+   * 处理函数 —— 不是漏写。原生 dblclick 的阈值改不了，留着它反而会和自定义间隔打架。 */
 
   // 给后台/弹窗留一个探针，用来回答「这个页面到底注入成功没有」
   window.__dblclickCloseTab = api;
